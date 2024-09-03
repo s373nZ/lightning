@@ -1,0 +1,57 @@
+---
+# https://docs.corelightning.org/docs/repro
+name: Repro Build Nightly
+on:
+  # 05:00 Berlin, 03:00 UTC, 23:00 New York, 20:00 Los Angeles
+  schedule:
+    - cron: "0 3 * * *"
+jobs:
+  ubuntu-noble:
+    name: Ubuntu Noble Repro build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v2
+
+      - name: Build environment setup
+        run: |
+          echo "Building base image for noble"
+          docker run --rm -v $(pwd):/build ubuntu:noble bash -c "apt-get update && apt-get install -y debootstrap && debootstrap noble /build/noble"
+          tar -C noble -c . | docker import - noble
+
+      - name: Builder image setup
+        run: docker build -t cl-repro-noble - < contrib/reprobuild/Dockerfile.noble
+
+      - name: Create release directory
+        run: mkdir $GITHUB_WORKSPACE/release
+
+      - name: Build using the builder image and store Git state.
+        run: |
+          # Perform the repro build.
+          docker run --name cl-build -v $GITHUB_WORKSPACE:/repo -e FORCE_MTIME=$(date +%F) -t cl-repro-noble
+
+          # Commit the image and use it to inspect the Git tree state.
+          docker commit cl-build cl-release
+          docker run --rm -v $GITHUB_WORKSPACE:/repo -t cl-release git status > release/git-status.txt
+          docker run --rm -v $GITHUB_WORKSPACE:/repo -t cl-release git diff > release/git-diff.txt
+
+          # Change permissions on the release files for access by build environment.
+          docker run --rm -v $GITHUB_WORKSPACE:/repo -t cl-repro-noble chmod -R 777 /repo/release
+
+      - name: Assert clean release
+        run: |
+          releasefile=$(ls release/clightning-*)
+          echo 'Release file:'
+          ls -al release/clightning-*
+
+          if [ -n "$(echo $releasefile | sed -n '/-modded/p')" ]; then
+            echo "Git Status:"
+            cat release/git-status.txt
+            echo "Git Diff:"
+            cat release/git-diff.txt
+
+            echo 'Error: release modded / dirty tree.'
+            exit 1
+          else
+            echo 'Success! Clean release.'
+          fi
