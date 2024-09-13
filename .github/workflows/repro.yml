@@ -5,6 +5,9 @@ on:
   # 05:00 Berlin, 03:00 UTC, 23:00 New York, 20:00 Los Angeles
   schedule:
     - cron: "0 3 * * *"
+  push:
+    branches:
+      - 7117-repro-nightly-builds-test-2
 jobs:
   ubuntu:
     name: "Ubuntu repro build: ${{ matrix.version }}"
