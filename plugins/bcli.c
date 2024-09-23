@@ -27,7 +27,7 @@ enum bitcoind_prio {
 };
 #define BITCOIND_NUM_PRIO (BITCOIND_HIGH_PRIO+1)
 
-#define BITCOIND_WARMUP_WAIT_INTERVAL 10
+#define BITCOIND_WARMUP_WAIT_INTERVAL 1
 
 struct bitcoind {
 	/* eg. "bitcoin-cli" */
@@ -94,7 +94,7 @@ struct bitcoin_cli {
 */
 struct warmup_waitcontext {
 	struct plugin *plugin;
-	pid_t *child;
+	pid_t child;
 };
 
 /* Add the n'th arg to *args, incrementing n and keeping args of size n+1 */
@@ -1047,8 +1047,13 @@ static void warmup_waitcheck(void *cb_arg) {
 
 	struct warmup_waitcontext *ctx = cb_arg;
 
-	pid_t child = *(ctx->child);
+	pid_t child = ctx->child;
+
 	waitpid(child, &status, 0);
+
+	/* FIXME: status is always 0 -- we can't check status of parent process in C? */
+	plugin_log(ctx->plugin, LOG_INFORM,
+		   "plugin_timer run with child %d and status %d.", child, status);
 
 	if (WEXITSTATUS(status) == 0)
 		return;
@@ -1070,16 +1075,23 @@ static void wait_and_check_bitcoind(struct plugin *p)
 
 	tal_free(output);
 
-	/* Schedule a timer to check if the child process is still waiting. */
-	struct warmup_waitcontext *warmup_waitctx = tal(tmpctx, struct warmup_waitcontext);
+	/* Schedule a timer to check if the process is still waiting. */
+	struct warmup_waitcontext *warmup_waitctx = tal(bitcoind, struct warmup_waitcontext);
 	warmup_waitctx->plugin = p;
-	warmup_waitctx->child = &child;
-
-	plugin_timer(p, time_from_sec(BITCOIND_WARMUP_WAIT_INTERVAL), warmup_waitcheck,
-		     warmup_waitctx);
 
 	/* Run the command. */
 	child = pipecmdarr(&in, &from, &from, cast_const2(char **, cmd));
+
+	plugin_log(p, LOG_INFORM, "pipecmd run.");
+
+	/* Kick off a timer, passing variables through the context by value, not reference */
+	warmup_waitctx->child = child;
+	plugin_timer(p, time_from_sec(BITCOIND_WARMUP_WAIT_INTERVAL), warmup_waitcheck,
+		     warmup_waitctx);
+
+	plugin_log(p, LOG_INFORM, "plugin_timer set.");
+
+	sleep(10);
 
 	if (bitcoind->rpcpass)
 		write_all(in, bitcoind->rpcpass, strlen(bitcoind->rpcpass));
