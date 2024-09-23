@@ -27,6 +27,8 @@ enum bitcoind_prio {
 };
 #define BITCOIND_NUM_PRIO (BITCOIND_HIGH_PRIO+1)
 
+#define BITCOIND_WARMUP_WAIT_INTERVAL 10
+
 struct bitcoind {
 	/* eg. "bitcoin-cli" */
 	char *cli;
@@ -85,6 +87,14 @@ struct bitcoin_cli {
 	struct command *cmd;
 	/* Used to stash content between multiple calls */
 	void *stash;
+};
+
+/* Data structure for passing information through a plugin_timer callback.
+   Wrap the plugin along with the pid to be able to write to the log.
+*/
+struct warmup_waitcontext {
+	struct plugin *plugin;
+	pid_t *child;
 };
 
 /* Add the n'th arg to *args, incrementing n and keeping args of size n+1 */
@@ -1031,16 +1041,44 @@ static void parse_getnetworkinfo_result(struct plugin *p, const char *buf)
 	tal_free(result);
 }
 
+/* Timer callback to detect and log whether bitcoind is waiting for RPC availability. */
+static void warmup_waitcheck(void *cb_arg) {
+	int status;
+
+	struct warmup_waitcontext *ctx = cb_arg;
+
+	pid_t child = *(ctx->child);
+	waitpid(child, &status, 0);
+
+	if (WEXITSTATUS(status) == 0)
+		return;
+
+	/* bitcoin/src/rpc/protocol.h:
+	 *      RPC_IN_WARMUP = -28, //!< Client still warming up
+	 */
+	if (WEXITSTATUS(status) == 28)
+		plugin_log(ctx->plugin, LOG_UNUSUAL,
+			   "Waiting for bitcoind to warm up...");
+}
+
 static void wait_and_check_bitcoind(struct plugin *p)
 {
 	int in, from;
 	pid_t child;
 	const char **cmd = gather_args(bitcoind, "-rpcwait", "getnetworkinfo", NULL);
-	bool printed = false;
 	char *output = NULL;
 
 	tal_free(output);
 
+	/* Schedule a timer to check if the child process is still waiting. */
+	struct warmup_waitcontext *warmup_waitctx = tal(tmpctx, struct warmup_waitcontext);
+	warmup_waitctx->plugin = p;
+	warmup_waitctx->child = &child;
+
+	plugin_timer(p, time_from_sec(BITCOIND_WARMUP_WAIT_INTERVAL), warmup_waitcheck,
+		     warmup_waitctx);
+
+	/* Run the command. */
 	child = pipecmdarr(&in, &from, &from, cast_const2(char **, cmd));
 
 	if (bitcoind->rpcpass)
@@ -1056,13 +1094,6 @@ static void wait_and_check_bitcoind(struct plugin *p)
 	}
 
 	output = grab_fd(cmd, from);
-
-	/* FIXME: Print out the warm-up using a one-shot timer */
-	if (!printed) {
-		plugin_log(p, LOG_UNUSUAL,
-			   "Waiting for bitcoind to warm up...");
-		printed = true;
-	}
 
 	parse_getnetworkinfo_result(p, output);
 
