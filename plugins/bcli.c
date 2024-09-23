@@ -1047,8 +1047,8 @@ static void warmup_waitcheck(void *cb_arg) {
 
 	struct warmup_waitcontext *ctx = cb_arg;
 
-	pid_t child = *(ctx->child);
-	waitpid(child, &status, 0);
+	pid_t *child = ctx->child;
+	waitpid(*child, &status, 0);
 
 	if (WEXITSTATUS(status) == 0)
 		return;
@@ -1071,7 +1071,7 @@ static void wait_and_check_bitcoind(struct plugin *p)
 	tal_free(output);
 
 	/* Schedule a timer to check if the child process is still waiting. */
-	struct warmup_waitcontext *warmup_waitctx = tal(tmpctx, struct warmup_waitcontext);
+	struct warmup_waitcontext *warmup_waitctx = tal(bitcoind, struct warmup_waitcontext);
 	warmup_waitctx->plugin = p;
 	warmup_waitctx->child = &child;
 
