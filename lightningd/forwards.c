@@ -134,19 +134,16 @@ void json_add_forwarding_fields(struct json_stream *response,
 		json_add_string(response, "style",
 				forward_style_name(cur->forward_style));
 
-#ifdef COMPAT_V070
-		/* If a forwarding doesn't have received_time it was created
-		 * before we added the tracking, do not include it here. */
-	if (cur->received_time.ts.tv_sec) {
+	/* If a forwarding doesn't have received_time it was created
+	 * before we added the tracking, it *should* be 0 in the database
+	 * but default to 0 here as well. */
+	if (cur->received_time.ts.tv_sec)
 		json_add_timeabs(response, "received_time", cur->received_time);
-		if (cur->resolved_time)
-			json_add_timeabs(response, "resolved_time", *cur->resolved_time);
-	}
-#else
-	json_add_timeabs(response, "received_time", cur->received_time);
+	else
+		json_add_num(response, "received_time", 0);
+
 	if (cur->resolved_time)
 		json_add_timeabs(response, "resolved_time", *cur->resolved_time);
-#endif
 }
 
 static void listforwardings_add_forwardings(struct json_stream *response,
